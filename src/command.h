@@ -9,6 +9,8 @@ struct command {
 
 	FILE *fout;
 	FILE *fin;
+
+	bool in_background;
 };
 
 const char *command_name(const struct command *);

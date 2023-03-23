@@ -6,6 +6,7 @@ enum parser_status {
 	parse_fail,
 	parse_error,
 	parse_ok,
+	parse_over
 };
 
 struct parser {

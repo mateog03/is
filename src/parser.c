@@ -10,14 +10,19 @@ enum token_type {
 	tok_redir_in,
 	tok_redir_out,
 	tok_redir_append,
+	tok_ampersand,
 	tok_comment,
 	tok_eof,
 	tok_eol,
+	tok_eoc,
 	tok_error
 };
 
+static int parser_last_tt;
+
 static bool is_wildcard(char);
 static const char *parser_current_word(const struct parser *);
+static void parser_discard_line(void);
 
 static void parser_append_char(struct parser *, int);
 static void parser_append_string(struct parser *, const char *);
@@ -41,6 +46,7 @@ enum parser_status parser_readline(struct parser *pa, struct command *cmd)
 
 	pa->lp = pa->op = 0;
 	cmd->fin = cmd->fout = NULL;
+	cmd->in_background = false;
 
 	pa->offsets[pa->op++] = 0;
 	tt = parser_parse(pa, cmd);
@@ -48,11 +54,18 @@ enum parser_status parser_readline(struct parser *pa, struct command *cmd)
 	if (tt == tok_eof)
 		return parse_fail;
 
+	if (tt == tok_error) {
+		if (parser_last_tt != tok_eol)
+			parser_discard_line();
+
+		return parse_error;
+	}
+
 	for (size_t i = 0; i < pa->op - 1; i++)
 		command_push_arg(cmd, pa->line + pa->offsets[i], i);
-
 	command_push_arg(cmd, NULL, pa->op - 1);
-	return tt == tok_error ? parse_error : parse_ok;
+
+	return tt == tok_eol ? parse_over : parse_ok;
 }
 
 static bool is_wildcard(char c)
@@ -63,6 +76,11 @@ static bool is_wildcard(char c)
 static const char *parser_current_word(const struct parser *pa)
 {
 	return pa->line + pa->offsets[pa->op - 1];
+}
+
+static void parser_discard_line(void)
+{
+	for (int c; (c = getchar()) != EOF && c != '\n'; );
 }
 
 static void parser_append_char(struct parser *pa, int c)
@@ -112,9 +130,10 @@ static enum token_type parser_get_token(struct parser *pa, int c)
 	case EOF:
 		return tok_eof;
 	case '#':
-		while ((c = getchar()) != EOF && c != '\n');
+		parser_discard_line();
 		return tok_comment;
 	case ';':
+		return tok_eoc;
 	case '\n':
 		return tok_eol;
 	case ' ':
@@ -129,6 +148,8 @@ static enum token_type parser_get_token(struct parser *pa, int c)
 		return tok_redir_out;
 	case '<':
 		return tok_redir_in;
+	case '&':
+		return tok_ampersand;
 	default:
 		do {
 			if (c == '\'')
@@ -149,7 +170,7 @@ static enum token_type parser_get_token(struct parser *pa, int c)
 				parser_append_char(pa, c);
 			} else
 				parser_append_char(pa, c);
-		} while ((c = getchar()) != EOF && !strchr("<>; \t\n", c));
+		} while ((c = getchar()) != EOF && !strchr("&<>; \t\n", c));
 
 		parser_append_char(pa, '\0');
 		ungetc(c, stdin);
@@ -160,7 +181,7 @@ static enum token_type parser_get_token(struct parser *pa, int c)
 
 static enum token_type parser_next_token(struct parser *pa)
 {
-	return parser_get_token(pa, getchar());
+	return parser_last_tt = parser_get_token(pa, getchar());
 }
 
 static enum token_type parser_parse(struct parser *pa, struct command *cmd)
@@ -195,10 +216,15 @@ static enum token_type parser_parse(struct parser *pa, struct command *cmd)
 
 		pa->lp = pa->offsets[pa->op - 1];
 		break;
+	case tok_ampersand:
+		cmd->in_background = true;
+		return tok_ampersand;
 	case tok_word:
 		pa->lp = pa->offsets[pa->op - 1];
 		parser_append_string(pa, parser_current_word(pa));
 		break;
+	case tok_comment:
+		return tok_eol;
 	default:
 		return tt;
 	}
